@@ -57,6 +57,12 @@ jobs:
       - name: Build binary
         run: make linux-${{ matrix.arch }}
 
+      - name: Verify static binary
+        run: |
+          BINARY="dist/gpu-metrics-exporter-linux-${{ matrix.arch }}"
+          file "$BINARY"
+          file "$BINARY" | grep -q "statically linked" || { echo "::error::Binary is not statically linked (musl/Alpine would break)"; exit 1; }
+
       - name: Stage release bundle
         run: |
           ARCH=${{ matrix.arch }}

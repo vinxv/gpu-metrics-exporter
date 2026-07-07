@@ -267,6 +267,8 @@ make package
 # 包含: 二进制文件、示例配置、README、systemd service 文件
 ```
 
+> 二进制为静态编译（禁用 CGO、无 libc 依赖），可在 glibc / musl（Alpine）/ 旧版 glibc 系统上直接运行。
+
 ## 添加新 GPU 品牌
 
 只需 3 步，无需修改代码：

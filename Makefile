@@ -14,12 +14,13 @@ all: test vet build
 build: $(DIST)
 	go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(APP) .
 
-# Cross-compile for common Linux architectures
+# Cross-compile static binaries for Linux (CGO disabled: no libc dependency,
+# runs on glibc / musl (Alpine) / older glibc systems).
 linux-amd64: $(DIST)
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(APP)-linux-amd64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(APP)-linux-amd64 .
 
 linux-arm64: $(DIST)
-	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(APP)-linux-arm64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(APP)-linux-arm64 .
 
 # Build all Linux archs
 linux-all: linux-amd64 linux-arm64
