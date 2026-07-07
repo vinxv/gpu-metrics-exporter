@@ -1,0 +1,153 @@
+# Enflame GCU 指标导出配置
+#
+# 指标命名约定：
+#   - 品牌原始名称 gcu_*         → 始终输出
+#   - 跨品牌通用名称 device_*    → 通过 aliases 输出副本
+#   - 通过 label brand="enflame" 区分厂商
+#
+# efsmi --dmon 输出带 4 行版权横幅 + 1 空行，通过 skip_lines 跳过。
+# 如果 efsmi 版本横幅行数不同，请调整 skip_lines。
+
+command: "efsmi --dmon -s all -c 1"
+timeout: 5s
+interval: 3s
+listen: "127.0.0.1:9810"
+
+labels:
+  - name: brand
+    value: "enflame"
+
+# ---- 通用指标（含跨品牌别名） ----
+metrics:
+  - name: gcu_power_watts
+    help: "GCU 瞬时功耗（瓦）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_power_watts
+    columnar:
+      column_name: "Pwr"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+  - name: gcu_temperature_celsius
+    help: "GCU 芯片温度（摄氏度）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_temperature_celsius
+    columnar:
+      column_name: "DTemp"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+  - name: gcu_compute_utilization_percent
+    help: "GCU 计算利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_compute_utilization_percent
+    columnar:
+      column_name: "DUsed"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+  - name: gcu_memory_utilization_percent
+    help: "GCU 显存利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_memory_utilization_percent
+    columnar:
+      column_name: "MUsed"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+  # ---- 品牌特有指标（无别名） ----
+  - name: gcu_sip_utilization_percent
+    help: "GCU SIP 利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "Sip"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+  - name: gcu_memory_used_mib
+    help: "GCU 已用显存（MiB）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "Mem"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+  - name: gcu_memory_clock_mhz
+    help: "GCU 显存时钟频率（MHz）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "Mclk"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+  - name: gcu_pcie_tx_mibps
+    help: "GCU PCIe 发送吞吐（MiB/s）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "TxPci"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+  - name: gcu_pcie_rx_mibps
+    help: "GCU PCIe 接收吞吐（MiB/s）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "RxPci"
+      device_column: 0
+      skip_lines: 5
+      unavailable_values: ["-", "N/A"]
+
+# ---- 可选功能 ----
+# 认证与访问控制
+# auth:
+#   username: "admin"
+#   password_hash: "$2a$10$..."   # ./gpu-metrics-exporter gen-htpasswd admin
+# allowed_ips:
+#   - "127.0.0.1"
+#   - "10.0.0.0/8"
+# denied_ips:
+#   - "192.168.1.100"
+
+# 指标级自定义标签（覆盖全局同名标签）
+# labels:
+#   - name: component
+#     value: "compute"
+
+# 其他提取模式示例：
+#   kind: regex
+#   regex:
+#     pattern: 'GCU\s+(\d+)\s*:\s*([\d.]+)\s*W'
+#     device_group: 1
+#     value_group: 2
+#
+#   kind: js
+#   js:
+#     script: |
+#       var lines = input.split('\n');
+#       for (var i = 0; i < lines.length; i++) {
+#           var parts = lines[i].trim().split(/\s+/);
+#           if (parts.length >= 2) {
+#               emit('gcu_power_watts', parseFloat(parts[1]), {device: parts[0]});
+#           }
+#       }

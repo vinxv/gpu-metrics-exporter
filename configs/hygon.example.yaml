@@ -1,0 +1,110 @@
+# Hygon HCU 指标导出配置
+#
+# 指标命名约定：
+#   - 品牌原始名称 hcu_*         → 始终输出
+#   - 跨品牌通用名称 device_*    → 通过 aliases 输出副本
+#   - 通过 label brand="hygon" 区分厂商
+#
+command: "hy-smi"
+timeout: 5s
+interval: 3s
+listen: "127.0.0.1:9810"
+
+labels:
+  - name: brand
+    value: "hygon"
+
+# ---- 通用指标（含跨品牌别名） ----
+metrics:
+  - name: hcu_power_watts
+    help: "HCU 瞬时功耗（瓦）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_power_watts
+    columnar:
+      column_name: "AvgPwr"
+      device_column: 0
+      skip_lines: 4
+      unavailable_values: ["-", "N/A"]
+
+  - name: hcu_temperature_celsius
+    help: "HCU 芯片温度（摄氏度）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_temperature_celsius
+    columnar:
+      column_name: "Temp"
+      device_column: 0
+      skip_lines: 4
+      unavailable_values: ["-", "N/A"]
+
+  - name: hcu_compute_utilization_percent
+    help: "HCU 计算利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_compute_utilization_percent
+    columnar:
+      column_name: "HCU%"
+      device_column: 0
+      skip_lines: 4
+      unavailable_values: ["-", "N/A"]
+
+  - name: hcu_memory_utilization_percent
+    help: "HCU 显存利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_memory_utilization_percent
+    columnar:
+      column_name: "VRAM%"
+      device_column: 0
+      skip_lines: 4
+      unavailable_values: ["-", "N/A"]
+
+  # ---- 品牌特有指标（无别名） ----
+  - name: hcu_power_cap_watts
+    help: "HCU 功耗上限（瓦）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "PwrCap"
+      device_column: 0
+      skip_lines: 4
+      unavailable_values: ["-", "N/A"]
+
+# ---- 可选功能 ----
+# 认证与访问控制
+# auth:
+#   username: "admin"
+#   password_hash: "$2a$10$..."   # ./gpu-metrics-exporter gen-htpasswd admin
+# allowed_ips:
+#   - "127.0.0.1"
+#   - "10.0.0.0/8"
+# denied_ips:
+#   - "192.168.1.100"
+
+# 指标级自定义标签（覆盖全局同名标签）
+# labels:
+#   - name: component
+#     value: "compute"
+
+# 其他提取模式示例：
+#   kind: regex
+#   regex:
+#     pattern: 'HCU\s+(\d+)\s*:\s*([\d.]+)\s*W'
+#     device_group: 1
+#     value_group: 2
+#
+#   kind: js
+#   js:
+#     script: |
+#       var lines = input.split('\n');
+#       for (var i = 0; i < lines.length; i++) {
+#           var parts = lines[i].trim().split(/\s+/);
+#           if (parts.length >= 2) {
+#               emit('hcu_power_watts', parseFloat(parts[1]), {device: parts[0]});
+#           }
+#       }

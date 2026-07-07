@@ -1,0 +1,35 @@
+# --- Build output ---
+dist/
+gpu-metrics-exporter
+*.zip
+
+# --- Go ---
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# --- IDE & Editor ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- Environment & Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- OS generated files ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+deploy/
+kb/

@@ -1,0 +1,144 @@
+# Illuvatar GPU 指标导出配置
+#
+# 指标命名约定：
+#   - 品牌原始名称 gpu_*         → 始终输出
+#   - 跨品牌通用名称 device_*    → 通过 aliases 输出副本
+#   - 通过 label brand="illuvatar" 区分厂商
+#
+# ixSMI 输出格式为双行表头（# 注释行 + 短标题行），
+# 列名使用短标题（如 pwr, gtemp, sm 等）。
+
+command: "ixsmi dmon -c 1"
+timeout: 5s
+interval: 3s
+listen: "127.0.0.1:9810"
+
+labels:
+  - name: brand
+    value: "illuvatar"
+
+# ---- 通用指标（含跨品牌别名） ----
+metrics:
+  - name: gpu_power_watts
+    help: "GPU 瞬时功耗（瓦）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_power_watts
+    columnar:
+      column_name: "pwr"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: gpu_temperature_celsius
+    help: "GPU 核心温度（摄氏度）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_temperature_celsius
+    columnar:
+      column_name: "gtemp"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: gpu_compute_utilization_percent
+    help: "GPU SM 利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_compute_utilization_percent
+    columnar:
+      column_name: "sm"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: gpu_memory_utilization_percent
+    help: "GPU 显存控制器利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_memory_utilization_percent
+    columnar:
+      column_name: "mem"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  # ---- 品牌特有指标（无别名） ----
+  - name: gpu_temperature_memory_celsius
+    help: "GPU 显存温度（摄氏度）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "mtemp"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: gpu_encoder_utilization_percent
+    help: "GPU 编码器利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "enc"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: gpu_decoder_utilization_percent
+    help: "GPU 解码器利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "dec"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: gpu_memory_clock_mhz
+    help: "GPU 显存时钟频率（MHz）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "mclk"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: gpu_processor_clock_mhz
+    help: "GPU 处理器时钟频率（MHz）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "pclk"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+# ---- 可选功能 ----
+# 认证与访问控制
+# auth:
+#   username: "admin"
+#   password_hash: "$2a$10$..."   # ./gpu-metrics-exporter gen-htpasswd admin
+# allowed_ips:
+#   - "127.0.0.1"
+#   - "10.0.0.0/8"
+# denied_ips:
+#   - "192.168.1.100"
+
+# 指标级自定义标签（覆盖全局同名标签）
+# labels:
+#   - name: component
+#     value: "sm"
+
+# 其他提取模式示例：
+#   kind: regex
+#   regex:
+#     pattern: 'GPU\s+(\d+)\s*:\s*([\d.]+)\s*W'
+#     device_group: 1
+#     value_group: 2
+#
+#   kind: js
+#   js:
+#     script: |
+#       var lines = input.split('\n');
+#       for (var i = 0; i < lines.length; i++) {
+#           var parts = lines[i].trim().split(/\s+/);
+#           if (parts.length >= 2) {
+#               emit('gpu_power_watts', parseFloat(parts[1]), {device: parts[0]});
+#           }
+#       }

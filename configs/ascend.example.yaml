@@ -1,0 +1,125 @@
+# Ascend NPU 指标导出配置
+#
+# 指标命名约定：
+#   - 品牌原始名称 npu_*         → 始终输出
+#   - 跨品牌通用名称 device_*    → 通过 aliases 输出副本
+#   - 通过 label brand="ascend" 区分厂商
+# npu-smi 结果直接写入 /dev/tty，无法通过标准输出捕获，
+# 因此使用 script 命令伪造终端来截取输出。
+# timeout 不能设置得太小，否则设备清单可能列不全。
+command: "script -q -c 'timeout 1.5 npu-smi info watch -s ptaicmb -d 5 || true' /dev/null"
+timeout: 5s
+interval: 3s
+listen: "127.0.0.1:9810"
+
+labels:
+  - name: brand
+    value: "ascend"
+
+# ---- 通用指标（含跨品牌别名） ----
+metrics:
+  - name: npu_power_watts
+    help: "NPU 瞬时功耗（瓦）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_power_watts
+    columnar:
+      column_name: "Pwr(W)"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: npu_temperature_celsius
+    help: "NPU 芯片温度（摄氏度）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_temperature_celsius
+    columnar:
+      column_name: "Temp(C)"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: npu_compute_utilization_percent
+    help: "NPU AI 核心利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_compute_utilization_percent
+    columnar:
+      column_name: "AI Core(%)"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: npu_memory_utilization_percent
+    help: "NPU 显存利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_memory_utilization_percent
+    columnar:
+      column_name: "Memory(%)"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  # ---- 品牌特有指标（无别名） ----
+  - name: npu_ai_cpu_utilization_percent
+    help: "NPU AI CPU 利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "AI Cpu(%)"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: npu_ctrl_cpu_utilization_percent
+    help: "NPU 控制 CPU 利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "Ctrl Cpu(%)"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: npu_memory_bandwidth_utilization_percent
+    help: "NPU 内存带宽利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "Memory BW(%)"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+# ---- 可选功能 ----
+# 认证与访问控制
+# auth:
+#   username: "admin"
+#   password_hash: "$2a$10$..."   # ./gpu-metrics-exporter gen-htpasswd admin
+# allowed_ips:
+#   - "127.0.0.1"
+#   - "10.0.0.0/8"
+# denied_ips:
+#   - "192.168.1.100"
+
+# 指标级自定义标签（覆盖全局同名标签）
+# labels:
+#   - name: component
+#     value: "ai-core"
+
+# 其他提取模式示例：
+#   kind: regex
+#   regex:
+#     pattern: 'Device\s+(\d+)\s*:\s*([\d.]+)%'
+#     device_group: 1
+#     value_group: 2
+#
+#   kind: js
+#   js:
+#     script: |
+#       var lines = input.split('\n');
+#       for (var i = 0; i < lines.length; i++) {
+#           var parts = lines[i].trim().split(/\s+/);
+#           if (parts.length >= 2) {
+#               emit('npu_power_watts', parseFloat(parts[1]), {device: parts[0]});
+#           }
+#       }

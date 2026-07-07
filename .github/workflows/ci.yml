@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -count=1 -timeout 30s -race
+
+      - name: Build (current platform)
+        run: make build
+
+      - name: Validate configs
+        run: make validate
+
+      - name: Cross-compile (linux amd64 + arm64)
+        run: make linux-all
+
+      - name: Package
+        run: make package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-metrics-exporter
+          path: gpu-metrics-exporter-*.zip
+          if-no-files-found: error
