@@ -10,7 +10,7 @@
 
 通用的、可配置的 Prometheus GPU 指标导出器。通过 YAML 配置文件即可适配任意 GPU 品牌，无需修改代码。
 
-目前已内置 4 种国产 GPU 的适配配置：**华为昇腾**、**燧原**、**天数智芯**、**海光**。
+目前已内置 5 种国产 GPU 的适配配置：**华为昇腾**、**燧原**、**天数智芯**、**海光**、**PPU**。
 
 ## 设计理念
 
@@ -65,6 +65,7 @@ make validate
 | 燧原 | `efsmi` | `configs/enflame.example.yaml` | `gcu_*` |
 | 天数智芯 | `ixsmi` | `configs/illuvatar.example.yaml` | `gpu_*` |
 | 海光 | `hy-smi` | `configs/hygon.example.yaml` | `hcu_*` |
+| PPU | `ppu-smi` | `configs/ppu.example.yaml` | `ppu_*` |
 
 ## 配置
 
@@ -300,7 +301,8 @@ gpu-metrics-exporter/
 │   ├── ascend.example.yaml
 │   ├── enflame.example.yaml
 │   ├── illuvatar.example.yaml
-│   └── hygon.example.yaml
+│   ├── hygon.example.yaml
+│   └── ppu.example.yaml
 ├── kb/                  # 各品牌 SMI 工具输出样例（用于开发调试）
 ├── deploy/              # 部署资源
 ├── Makefile             # 编译、测试、打包

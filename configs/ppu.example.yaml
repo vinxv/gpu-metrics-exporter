@@ -1,0 +1,155 @@
+# PPU 指标导出配置
+#
+# 指标命名约定：
+#   - 品牌原始名称 ppu_*         → 始终输出
+#   - 跨品牌通用名称 device_*    → 通过 aliases 输出副本
+#   - 通过 label brand="ppu" 区分厂商
+#
+# ppu-smi dmon 输出格式与 ixsmi dmon 一致：双行 # 表头
+# （首行为列名，次行为单位），无版权横幅，因此不需要 skip_lines。
+# 默认 -s puc 已覆盖功耗/温度、利用率、时钟三类指标。
+# 若 ppu-smi 版本默认 select 不同，可显式追加 -s puc。
+
+command: "ppu-smi dmon -c 1"
+timeout: 5s
+interval: 3s
+listen: "127.0.0.1:9810"
+
+labels:
+  - name: brand
+    value: "ppu"
+
+# ---- 通用指标（含跨品牌别名） ----
+metrics:
+  - name: ppu_power_watts
+    help: "PPU 瞬时功耗（瓦）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_power_watts
+    columnar:
+      column_name: "pwr"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: ppu_temperature_celsius
+    help: "PPU 芯片温度（摄氏度）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_temperature_celsius
+    columnar:
+      column_name: "ptemp"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: ppu_compute_utilization_percent
+    help: "PPU 计算单元利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_compute_utilization_percent
+    columnar:
+      column_name: "cu"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: ppu_memory_utilization_percent
+    help: "PPU 显存利用率（百分比）"
+    type: gauge
+    kind: columnar
+    aliases:
+      - device_memory_utilization_percent
+    columnar:
+      column_name: "mem"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  # ---- 品牌特有指标（无别名） ----
+  - name: ppu_memory_temperature_celsius
+    help: "PPU 显存温度（摄氏度）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "mtemp"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: ppu_core_utilization_percent
+    help: "PPU 核心利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "core"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: ppu_encoder_utilization_percent
+    help: "PPU 编码器利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "enc"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: ppu_decoder_utilization_percent
+    help: "PPU 解码器利用率（百分比）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "dec"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: ppu_memory_clock_mhz
+    help: "PPU 显存时钟频率（MHz）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "mclk"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+  - name: ppu_processor_clock_mhz
+    help: "PPU 处理器时钟频率（MHz）"
+    type: gauge
+    kind: columnar
+    columnar:
+      column_name: "pclk"
+      device_column: 0
+      unavailable_values: ["-", "N/A"]
+
+# ---- 可选功能 ----
+# 认证与访问控制
+# auth:
+#   username: "admin"
+#   password_hash: "$2a$10$..."   # ./gpu-metrics-exporter gen-htpasswd admin
+# allowed_ips:
+#   - "127.0.0.1"
+#   - "10.0.0.0/8"
+# denied_ips:
+#   - "192.168.1.100"
+
+# 指标级自定义标签（覆盖全局同名标签）
+# labels:
+#   - name: component
+#     value: "cu"
+
+# 其他提取模式示例：
+#   kind: regex
+#   regex:
+#     pattern: 'PPU\s+(\d+)\s*:\s*([\d.]+)\s*W'
+#     device_group: 1
+#     value_group: 2
+#
+#   kind: js
+#   js:
+#     script: |
+#       var lines = input.split('\n');
+#       for (var i = 0; i < lines.length; i++) {
+#           var parts = lines[i].trim().split(/\s+/);
+#           if (parts.length >= 2) {
+#               emit('ppu_power_watts', parseFloat(parts[1]), {device: parts[0]});
+#           }
+#       }
