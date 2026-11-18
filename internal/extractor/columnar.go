@@ -14,63 +14,91 @@ import (
 type columnarExtractor struct {
 	metricDef config.MetricDef
 	cc        config.ColumnarConfig
+	unavail   map[string]bool
 }
 
 func newColumnar(md config.MetricDef) (*columnarExtractor, error) {
+	unavail := make(map[string]bool, len(md.Columnar.UnavailableValues))
+	for _, v := range md.Columnar.UnavailableValues {
+		unavail[v] = true
+	}
 	return &columnarExtractor{
 		metricDef: md,
 		cc:        *md.Columnar,
+		unavail:   unavail,
 	}, nil
 }
 
 func (c *columnarExtractor) Extract(_ context.Context, stdout string) ([]model.MetricPoint, error) {
-	lines := strings.Split(stdout, "\n")
+	table, err := parseColumnarTable(strings.Split(stdout, "\n"), c.cc.SkipLines)
+	return c.extractTable(table, err)
+}
 
-	// Build index of unavailable values for fast lookup.
-	unavail := make(map[string]bool, len(c.cc.UnavailableValues))
-	for _, v := range c.cc.UnavailableValues {
-		unavail[v] = true
+type columnarTable struct {
+	headers     []string
+	headerLine  int
+	wordColumns map[string]int
+	colStarts   []int
+	rows        [][]string
+}
+
+func parseColumnarTable(lines []string, skipLines int) (columnarTable, error) {
+	headers, dataStart, err := scanHeaderZone(lines, skipLines)
+	if err != nil {
+		return columnarTable{}, err
 	}
 
-	// Phase 1: Find header zone and the first data line.
-	headerTexts, dataStart, err := scanHeaderZone(lines, c.cc.SkipLines)
+	table := columnarTable{
+		headers:     headers,
+		headerLine:  dataStart,
+		colStarts:   columnStartPositions(lines[dataStart]),
+		wordColumns: make(map[string]int),
+	}
+	for _, hdr := range headers {
+		starts := columnStartPositions(hdr)
+		for col, start := range starts[:min(len(starts), len(table.colStarts))] {
+			end := len(hdr)
+			if col+1 < len(starts) {
+				end = starts[col+1]
+			}
+			word := strings.TrimSpace(hdr[start:end])
+			if _, exists := table.wordColumns[word]; !exists {
+				table.wordColumns[word] = col
+			}
+		}
+	}
+	for _, line := range lines[dataStart:] {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			table.rows = append(table.rows, strings.Fields(line))
+		}
+	}
+	return table, nil
+}
+
+func (c *columnarExtractor) extractTable(table columnarTable, err error) ([]model.MetricPoint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("columnar %q: %w", c.metricDef.Name, err)
 	}
-	if dataStart >= len(lines) {
-		return nil, fmt.Errorf("columnar %q: no data lines after header", c.metricDef.Name)
-	}
 
-	// Phase 2: Determine column boundaries from the first data line.
-	// Column boundaries are character-position based and apply to both
-	// header and data lines. This handles multi-word column names correctly.
-	colStarts := columnStartPositions(lines[dataStart])
-
-	// Phase 3: Find the target column name in the header text.
-	// Search across all header lines (for illuvatar-style multi-line headers).
-	valueCol := findColumnInHeaders(headerTexts, colStarts, c.cc.ColumnName)
+	valueCol := table.findColumn(c.cc.ColumnName)
 	if valueCol < 0 {
-		// dataStart points to the first data line; the header is the line before it.
-		headerLine := dataStart // 1-based line number in the output
 		return nil, fmt.Errorf("columnar %q: column %q not found in headers %q (skip_lines=%d, header_line=%d)",
-			c.metricDef.Name, c.cc.ColumnName, headerTexts, c.cc.SkipLines, headerLine)
+			c.metricDef.Name, c.cc.ColumnName, table.headers, c.cc.SkipLines, table.headerLine)
 	}
 
-	// Phase 4: Parse all data lines using the column index.
+	lastCol := max(c.cc.DeviceColumn, valueCol)
+	for _, col := range c.cc.LabelColumns {
+		lastCol = max(lastCol, col)
+	}
 	var points []model.MetricPoint
-	for i := dataStart; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		tokens := strings.Fields(line)
-		if len(tokens) <= max(c.cc.DeviceColumn, valueCol) {
+	for _, tokens := range table.rows {
+		if len(tokens) <= lastCol {
 			continue
 		}
 
 		rawValue := tokens[valueCol]
-		if unavail[rawValue] {
+		if c.unavail[rawValue] {
 			continue
 		}
 
@@ -79,12 +107,13 @@ func (c *columnarExtractor) Extract(_ context.Context, stdout string) ([]model.M
 			continue
 		}
 
-		device := tokens[c.cc.DeviceColumn]
-
-		labels := make(map[string]string, len(c.metricDef.Labels)+1)
-		labels["device"] = device
+		labels := make(map[string]string, len(c.metricDef.Labels)+len(c.cc.LabelColumns)+1)
+		labels["device"] = tokens[c.cc.DeviceColumn]
 		for _, lbl := range c.metricDef.Labels {
 			labels[lbl.Name] = lbl.Value
+		}
+		for name, col := range c.cc.LabelColumns {
+			labels[name] = tokens[col]
 		}
 
 		points = append(points, model.MetricPoint{
@@ -160,38 +189,16 @@ func columnStartPositions(dataLine string) []int {
 	return starts
 }
 
-// findColumnInHeaders searches header text lines for targetName and returns
-// the column index.
-//
-// Two strategies are tried in order:
-//  1. Header word-starts: works for single-word column names (illuvatar).
-//     Each word-start in the header defines a column region.
-//  2. Data-aligned midpoint: works for multi-word column names (ascend).
-//     The column name's midpoint in the header is mapped to a data column region.
-func findColumnInHeaders(headers []string, dataColStarts []int, targetName string) int {
-	// Strategy 1: header word-starts — each word-start is a column boundary.
-	// Works for single-word column names (illuvatar). Must validate that the
-	// column index is within the data column count, because multi-word header
-	// names like "AI Core(%)" can inflate the header word count.
-	for _, hdr := range headers {
-		hdrStarts := columnStartPositions(hdr)
-		nCols := len(hdrStarts)
-		for col := 0; col < nCols; col++ {
-			start := hdrStarts[col]
-			end := len(hdr)
-			if col+1 < nCols {
-				end = hdrStarts[col+1]
-			}
-			region := strings.TrimSpace(hdr[start:end])
-			if region == targetName && col < len(dataColStarts) {
-				return col
-			}
-		}
+// findColumn searches the header for targetName and returns its column index.
+func (t columnarTable) findColumn(targetName string) int {
+	if col, ok := t.wordColumns[targetName]; ok {
+		return col
 	}
 
+	dataColStarts := t.colStarts
 	// Strategy 2: data-aligned midpoint — for multi-word column names where
 	// the column name spans multiple header word-starts but maps to one data column.
-	for _, hdr := range headers {
+	for _, hdr := range t.headers {
 		pos := strings.Index(hdr, targetName)
 		if pos < 0 {
 			continue
@@ -214,7 +221,7 @@ func findColumnInHeaders(headers []string, dataColStarts []int, targetName strin
 	}
 
 	// Strategy 3: substring match within data column regions (loose fallback).
-	for _, hdr := range headers {
+	for _, hdr := range t.headers {
 		nCols := len(dataColStarts)
 		for col := 0; col < nCols; col++ {
 			start := dataColStarts[col]

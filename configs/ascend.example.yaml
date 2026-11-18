@@ -4,6 +4,7 @@
 #   - 品牌原始名称 npu_*         → 始终输出
 #   - 跨品牌通用名称 device_*    → 通过 aliases 输出副本
 #   - 通过 label brand="ascend" 区分厂商
+#   - device 和 chip 分别对应 NpuID(Idx) 和 ChipId(Idx)
 # npu-smi 结果直接写入 /dev/tty，无法通过标准输出捕获，
 # 因此使用 script 命令伪造终端来截取输出。
 # timeout 不能设置得太小，否则设备清单可能列不全。
@@ -27,6 +28,7 @@ metrics:
     columnar:
       column_name: "Pwr(W)"
       device_column: 0
+      label_columns: {chip: 1}
       unavailable_values: ["-", "N/A"]
 
   - name: npu_temperature_celsius
@@ -38,6 +40,7 @@ metrics:
     columnar:
       column_name: "Temp(C)"
       device_column: 0
+      label_columns: {chip: 1}
       unavailable_values: ["-", "N/A"]
 
   - name: npu_compute_utilization_percent
@@ -49,6 +52,7 @@ metrics:
     columnar:
       column_name: "AI Core(%)"
       device_column: 0
+      label_columns: {chip: 1}
       unavailable_values: ["-", "N/A"]
 
   - name: npu_memory_utilization_percent
@@ -60,6 +64,7 @@ metrics:
     columnar:
       column_name: "Memory(%)"
       device_column: 0
+      label_columns: {chip: 1}
       unavailable_values: ["-", "N/A"]
 
   # ---- 品牌特有指标（无别名） ----
@@ -70,6 +75,7 @@ metrics:
     columnar:
       column_name: "AI Cpu(%)"
       device_column: 0
+      label_columns: {chip: 1}
       unavailable_values: ["-", "N/A"]
 
   - name: npu_ctrl_cpu_utilization_percent
@@ -79,6 +85,7 @@ metrics:
     columnar:
       column_name: "Ctrl Cpu(%)"
       device_column: 0
+      label_columns: {chip: 1}
       unavailable_values: ["-", "N/A"]
 
   - name: npu_memory_bandwidth_utilization_percent
@@ -88,6 +95,7 @@ metrics:
     columnar:
       column_name: "Memory BW(%)"
       device_column: 0
+      label_columns: {chip: 1}
       unavailable_values: ["-", "N/A"]
 
 # ---- 可选功能 ----

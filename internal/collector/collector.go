@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -27,13 +28,19 @@ type GPUCollector struct {
 	lastScrape time.Time
 
 	// Pre-built descriptors keyed by metric name (primary + alias).
-	descs   map[string]*prometheus.Desc
+	descs   map[string]metricDescriptor
 	aliases map[string][]string // primary name -> alias names
 
 	// Self-monitoring metrics.
 	upGauge          prometheus.Gauge
 	scrapeDuration   prometheus.Gauge
 	parseErrorsTotal prometheus.Counter
+}
+
+type metricDescriptor struct {
+	desc        *prometheus.Desc
+	labelNames  []string
+	constLabels prometheus.Labels
 }
 
 // New creates a GPUCollector.
@@ -49,7 +56,7 @@ func New(cfg *config.Config) (*GPUCollector, error) {
 		cfg:     cfg,
 		cmd:     cmd,
 		pool:    pool,
-		descs:   make(map[string]*prometheus.Desc),
+		descs:   make(map[string]metricDescriptor),
 		aliases: make(map[string][]string),
 		upGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "gpu_metrics_up",
@@ -65,8 +72,7 @@ func New(cfg *config.Config) (*GPUCollector, error) {
 		}),
 	}
 
-	// Pre-build descriptors. Global labels + per-metric labels are const labels;
-	// "device" is the only variable label. Per-metric labels override globals.
+	// Per-metric static labels override global labels.
 	for _, md := range cfg.Metrics {
 		constLabels := prometheus.Labels{}
 		for _, lbl := range cfg.Labels {
@@ -75,21 +81,13 @@ func New(cfg *config.Config) (*GPUCollector, error) {
 		for _, lbl := range md.Labels {
 			constLabels[lbl.Name] = lbl.Value
 		}
-		c.descs[md.Name] = prometheus.NewDesc(
-			md.Name,
-			md.Help,
-			[]string{"device"}, // variable labels
-			constLabels,        // const labels from config
-		)
-
-		// Build descriptors and record mappings for aliases.
-		for _, alias := range md.Aliases {
-			c.descs[alias] = prometheus.NewDesc(
-				alias,
-				md.Help,
-				[]string{"device"},
-				constLabels,
-			)
+		labelNames := md.VariableLabels()
+		for _, name := range append([]string{md.Name}, md.Aliases...) {
+			c.descs[name] = metricDescriptor{
+				desc:        prometheus.NewDesc(name, md.Help, labelNames, constLabels),
+				labelNames:  labelNames,
+				constLabels: constLabels,
+			}
 		}
 		if len(md.Aliases) > 0 {
 			c.aliases[md.Name] = md.Aliases
@@ -102,7 +100,7 @@ func New(cfg *config.Config) (*GPUCollector, error) {
 // Describe sends descriptors for all configured metrics plus self-monitoring.
 func (c *GPUCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, desc := range c.descs {
-		ch <- desc
+		ch <- desc.desc
 	}
 	c.upGauge.Describe(ch)
 	c.scrapeDuration.Describe(ch)
@@ -115,23 +113,17 @@ func (c *GPUCollector) Collect(ch chan<- prometheus.Metric) {
 
 	// Fast path: return cached data if within the configured interval.
 	c.mu.RLock()
-	if time.Since(c.lastScrape) < c.cfg.Interval && len(c.cache) > 0 {
-		for _, m := range c.cache {
-			ch <- m
-		}
-		c.mu.RUnlock()
+	cacheHit := c.collectFromCache(ch)
+	c.mu.RUnlock()
+	if cacheHit {
 		return
 	}
-	c.mu.RUnlock()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Double-checked locking.
-	if time.Since(c.lastScrape) < c.cfg.Interval && len(c.cache) > 0 {
-		for _, m := range c.cache {
-			ch <- m
-		}
+	if c.collectFromCache(ch) {
 		return
 	}
 
@@ -163,12 +155,15 @@ func (c *GPUCollector) Collect(ch chan<- prometheus.Metric) {
 			continue
 		}
 
-		m, err := prometheus.NewConstMetric(
-			desc,
-			typeToValueType(p.Type),
-			p.Value,
-			p.Labels["device"], // only variable label value
-		)
+		labelValues, err := desc.labelValues(p)
+		if err != nil {
+			slog.Warn("parse error", "error", err)
+			c.parseErrorsTotal.Inc()
+			continue
+		}
+
+		valueType := typeToValueType(p.Type)
+		m, err := prometheus.NewConstMetric(desc.desc, valueType, p.Value, labelValues...)
 		if err != nil {
 			slog.Warn("create metric failed", "name", p.Name, "error", err)
 			continue
@@ -178,25 +173,14 @@ func (c *GPUCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- m
 
 		// Emit aliases for this metric.
-		if aliases, ok := c.aliases[p.Name]; ok {
-			for _, alias := range aliases {
-				aliasDesc, ok := c.descs[alias]
-				if !ok {
-					continue
-				}
-				am, err := prometheus.NewConstMetric(
-					aliasDesc,
-					typeToValueType(p.Type),
-					p.Value,
-					p.Labels["device"],
-				)
-				if err != nil {
-					slog.Warn("create alias metric failed", "alias", alias, "error", err)
-					continue
-				}
-				metrics = append(metrics, am)
-				ch <- am
+		for _, alias := range c.aliases[p.Name] {
+			am, err := prometheus.NewConstMetric(c.descs[alias].desc, valueType, p.Value, labelValues...)
+			if err != nil {
+				slog.Warn("create alias metric failed", "alias", alias, "error", err)
+				continue
 			}
+			metrics = append(metrics, am)
+			ch <- am
 		}
 	}
 
@@ -205,6 +189,35 @@ func (c *GPUCollector) Collect(ch chan<- prometheus.Metric) {
 	c.lastScrape = time.Now()
 
 	c.sendSelfMetrics(ch)
+}
+
+func (d metricDescriptor) labelValues(p model.MetricPoint) ([]string, error) {
+	values := make([]string, len(d.labelNames))
+	for i, name := range d.labelNames {
+		value, exists := p.Labels[name]
+		if !exists && name != "device" {
+			return nil, fmt.Errorf("metric %q: missing variable label %q", p.Name, name)
+		}
+		values[i] = value
+	}
+	for name := range p.Labels {
+		if _, static := d.constLabels[name]; !static && !slices.Contains(d.labelNames, name) {
+			slog.Warn("ignoring undeclared metric label", "metric", p.Name, "label", name)
+		}
+	}
+	return values, nil
+}
+
+// collectFromCache requires c.mu to be held.
+func (c *GPUCollector) collectFromCache(ch chan<- prometheus.Metric) bool {
+	if time.Since(c.lastScrape) >= c.cfg.Interval || len(c.cache) == 0 {
+		return false
+	}
+	for _, m := range c.cache {
+		ch <- m
+	}
+	c.sendSelfMetrics(ch)
+	return true
 }
 
 func (c *GPUCollector) sendSelfMetrics(ch chan<- prometheus.Metric) {

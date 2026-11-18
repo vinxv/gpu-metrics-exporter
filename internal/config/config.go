@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,12 +47,12 @@ type AuthConfig struct {
 
 // MetricDef describes one metric to extract from smi output.
 type MetricDef struct {
-	Name     string         `yaml:"name"`
-	Help     string         `yaml:"help"`
-	Type     string         `yaml:"type"` // "gauge" or "counter"
-	Kind     string         `yaml:"kind"` // "columnar", "regex", "js"
-	Labels   []LabelDef     `yaml:"labels,omitempty"`
-	Aliases  []string       `yaml:"aliases,omitempty"`
+	Name     string          `yaml:"name"`
+	Help     string          `yaml:"help"`
+	Type     string          `yaml:"type"` // "gauge" or "counter"
+	Kind     string          `yaml:"kind"` // "columnar", "regex", "js"
+	Labels   []LabelDef      `yaml:"labels,omitempty"`
+	Aliases  []string        `yaml:"aliases,omitempty"`
 	Columnar *ColumnarConfig `yaml:"columnar,omitempty"`
 	Regex    *RegexConfig    `yaml:"regex,omitempty"`
 	JS       *JSConfig       `yaml:"js,omitempty"`
@@ -66,10 +68,11 @@ type LabelDef struct {
 
 // ColumnarConfig configures columnar (tabular) extraction.
 type ColumnarConfig struct {
-	ColumnName        string   `yaml:"column_name"`        // header text to match
-	DeviceColumn      int      `yaml:"device_column"`      // zero-based column index for device ID
-	SkipLines         int      `yaml:"skip_lines"`         // lines to skip before header
-	UnavailableValues []string `yaml:"unavailable_values"` // values that mean "no data"
+	ColumnName        string         `yaml:"column_name"`   // header text to match
+	DeviceColumn      int            `yaml:"device_column"` // zero-based column index for device ID
+	LabelColumns      map[string]int `yaml:"label_columns,omitempty"`
+	SkipLines         int            `yaml:"skip_lines"`         // lines to skip before header
+	UnavailableValues []string       `yaml:"unavailable_values"` // values that mean "no data"
 }
 
 // RegexConfig configures regex-based extraction.
@@ -82,7 +85,8 @@ type RegexConfig struct {
 
 // JSConfig configures JS-based extraction (goja sandbox).
 type JSConfig struct {
-	Script string `yaml:"script"` // JavaScript parsing code
+	Script     string   `yaml:"script"` // JavaScript parsing code
+	LabelNames []string `yaml:"label_names,omitempty"`
 }
 
 // valid extract kinds
@@ -95,6 +99,22 @@ const (
 // CompiledRegex returns the pre-compiled regex for this metric (regex kind only).
 func (md *MetricDef) CompiledRegex() *regexp.Regexp {
 	return md.compiledRegex
+}
+
+// VariableLabels returns the device label and any labels declared by the extractor.
+func (md MetricDef) VariableLabels() []string {
+	names := []string{"device"}
+	switch md.Kind {
+	case KindColumnar:
+		if md.Columnar != nil {
+			return append(names, slices.Sorted(maps.Keys(md.Columnar.LabelColumns))...)
+		}
+	case KindJS:
+		if md.JS != nil {
+			return append(names, md.JS.LabelNames...)
+		}
+	}
+	return names
 }
 
 // LoadFile reads and validates a YAML config from a file path.
@@ -183,6 +203,7 @@ func (c *Config) Validate() error {
 		if m.Type != "gauge" && m.Type != "counter" {
 			errs = append(errs, fmt.Sprintf("metrics[%d] (%s): type must be 'gauge' or 'counter', got %q", i, m.Name, m.Type))
 		}
+		errs = append(errs, validateVariableLabels(i, m, c.Labels)...)
 
 		// Validate aliases (per-metric checks).
 		for j, alias := range m.Aliases {
@@ -232,6 +253,31 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+var labelNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+func validateVariableLabels(idx int, m *MetricDef, globals []LabelDef) []string {
+	var errs []string
+	staticLabels := make(map[string]bool, len(globals)+len(m.Labels))
+	for _, labels := range [][]LabelDef{globals, m.Labels} {
+		for _, label := range labels {
+			staticLabels[label.Name] = true
+		}
+	}
+	seen := make(map[string]bool)
+	for _, name := range m.VariableLabels() {
+		switch {
+		case !labelNamePattern.MatchString(name) || strings.HasPrefix(name, "__"):
+			errs = append(errs, fmt.Sprintf("metrics[%d] (%s): invalid variable label name %q", idx, m.Name, name))
+		case seen[name]:
+			errs = append(errs, fmt.Sprintf("metrics[%d] (%s): duplicate variable label %q", idx, m.Name, name))
+		case staticLabels[name]:
+			errs = append(errs, fmt.Sprintf("metrics[%d] (%s): variable label %q conflicts with a static label", idx, m.Name, name))
+		}
+		seen[name] = true
+	}
+	return errs
+}
+
 func validateColumnar(idx int, m *MetricDef) []string {
 	var errs []string
 	cc := m.Columnar
@@ -244,6 +290,14 @@ func validateColumnar(idx int, m *MetricDef) []string {
 	}
 	if cc.DeviceColumn < 0 {
 		errs = append(errs, fmt.Sprintf("metrics[%d] (%s): columnar.device_column must be >= 0", idx, m.Name))
+	}
+	if cc.SkipLines < 0 {
+		errs = append(errs, fmt.Sprintf("metrics[%d] (%s): columnar.skip_lines must be >= 0", idx, m.Name))
+	}
+	for _, name := range slices.Sorted(maps.Keys(cc.LabelColumns)) {
+		if cc.LabelColumns[name] < 0 {
+			errs = append(errs, fmt.Sprintf("metrics[%d] (%s): columnar.label_columns[%q] must be >= 0", idx, m.Name, name))
+		}
 	}
 	return errs
 }

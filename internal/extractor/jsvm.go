@@ -2,9 +2,9 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/dop251/goja"
@@ -18,18 +18,21 @@ import (
 // produce metric points.
 type jsvmExtractor struct {
 	metricDef config.MetricDef
-	jc        config.JSConfig
+	program   *goja.Program
 }
 
 func newJSVM(md config.MetricDef) (*jsvmExtractor, error) {
+	program, err := goja.Compile(md.Name, md.JS.Script, false)
+	if err != nil {
+		return nil, fmt.Errorf("jsvm %q: compile script: %w", md.Name, err)
+	}
 	return &jsvmExtractor{
 		metricDef: md,
-		jc:        *md.JS,
+		program:   program,
 	}, nil
 }
 
-func (j *jsvmExtractor) Extract(ctx context.Context, stdout string) (points []model.MetricPoint, err error) {
-	// Recover from JS panics (infinite loops trigger InterruptMode panic).
+func (j *jsvmExtractor) Extract(_ context.Context, stdout string) (points []model.MetricPoint, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("jsvm %q: script panic: %v", j.metricDef.Name, r)
@@ -86,23 +89,19 @@ func (j *jsvmExtractor) Extract(ctx context.Context, stdout string) (points []mo
 	}
 
 	// Hard timeout via interrupt: if the script runs too long, interrupt it.
-	time.AfterFunc(5*time.Second, func() {
+	timer := time.AfterFunc(5*time.Second, func() {
 		vm.Interrupt("execution timeout")
 	})
-	vm.ClearInterrupt()
+	defer timer.Stop()
 
-	_, runErr := vm.RunString(j.jc.Script)
+	_, runErr := vm.RunProgram(j.program)
 	if runErr != nil {
-		// If interrupted, return what we collected so far plus the error.
-		if strings.Contains(runErr.Error(), "interrupt") || strings.Contains(runErr.Error(), "timeout") {
+		var interrupted *goja.InterruptedError
+		if errors.As(runErr, &interrupted) {
 			return collected, fmt.Errorf("jsvm %q: script interrupted: %w", j.metricDef.Name, runErr)
 		}
 		return collected, fmt.Errorf("jsvm %q: script error: %w", j.metricDef.Name, runErr)
 	}
-
-	// Override name/help/type from config for consistency, since emit() only
-	// sets name (we allow override so JS can emit multiple metrics if needed).
-	_ = collected // points are returned as-is from JS
 
 	return collected, nil
 }

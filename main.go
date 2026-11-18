@@ -74,6 +74,9 @@ func cmdValidate(args []string) {
 	}
 
 	cfg, err := config.LoadFile(*configPath)
+	if err == nil {
+		_, err = extractor.NewPool(cfg.Metrics)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config file %s: FAILED\n", *configPath)
 		fmt.Fprintf(os.Stderr, "  %v\n", err)

@@ -3,6 +3,7 @@ package extractor
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"gpu-metrics-monitor/internal/config"
 	"gpu-metrics-monitor/internal/model"
@@ -58,13 +59,35 @@ func NewPool(metrics []config.MetricDef) (*Pool, error) {
 // A single extractor failing does not stop the others — the error is logged
 // via the caller. Partial results are returned.
 func (p *Pool) ExtractAll(ctx context.Context, stdout string) ([]model.MetricPoint, []error) {
+	type parsedTable struct {
+		table columnarTable
+		err   error
+	}
 	var (
 		allPoints []model.MetricPoint
 		allErrs   []error
+		lines     []string
+		tables    map[int]parsedTable
 	)
 
 	for _, e := range p.extractors {
-		points, err := e.Extract(ctx, stdout)
+		var points []model.MetricPoint
+		var err error
+		if columnar, ok := e.(*columnarExtractor); ok {
+			if tables == nil {
+				lines = strings.Split(stdout, "\n")
+				tables = make(map[int]parsedTable)
+			}
+			skip := columnar.cc.SkipLines
+			parsed, exists := tables[skip]
+			if !exists {
+				parsed.table, parsed.err = parseColumnarTable(lines, skip)
+				tables[skip] = parsed
+			}
+			points, err = columnar.extractTable(parsed.table, parsed.err)
+		} else {
+			points, err = e.Extract(ctx, stdout)
+		}
 		if err != nil {
 			allErrs = append(allErrs, err)
 			continue

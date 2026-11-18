@@ -286,6 +286,67 @@ func TestJSExtractorInfiniteLoopProtection(t *testing.T) {
 	}
 }
 
+func TestJSProgramCompiledOnCreationAndIsolatedPerExtract(t *testing.T) {
+	md := config.MetricDef{
+		Name: "test_metric",
+		Kind: KindJS,
+		JS:   &config.JSConfig{Script: "var ="},
+	}
+	if _, err := New(md); err == nil || !strings.Contains(err.Error(), "compile script") {
+		t.Fatalf("New with invalid script returned %v", err)
+	}
+
+	md.JS.Script = `
+		var count = (typeof count === "undefined" ? 0 : count) + 1;
+		emit("test_metric", count, {device: input});
+	`
+	e, err := New(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, device := range []string{"0", "1"} {
+		t.Run(device, func(t *testing.T) {
+			t.Parallel()
+			points, err := e.Extract(context.Background(), device)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(points) != 1 || points[0].Value != 1 || points[0].Labels["device"] != device {
+				t.Fatalf("unexpected points: %+v", points)
+			}
+		})
+	}
+}
+
+func TestColumnarPoolTablesAreScopedBySkipLinesAndScrape(t *testing.T) {
+	p, err := NewPool([]config.MetricDef{
+		{Name: "first", Kind: KindColumnar, Columnar: &config.ColumnarConfig{ColumnName: "A"}},
+		{Name: "missing", Kind: KindColumnar, Columnar: &config.ColumnarConfig{ColumnName: "Unknown"}},
+		{Name: "second", Kind: KindColumnar, Columnar: &config.ColumnarConfig{ColumnName: "B", SkipLines: 2}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scrape := range []struct {
+		input string
+		first float64
+		next  float64
+	}{
+		{"GPU A\n0   1\nGPU B\n1   2\n", 1, 2},
+		{"GPU A\n0   3\nGPU B\n1   4\n", 3, 4},
+	} {
+		points, errs := p.ExtractAll(context.Background(), scrape.input)
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), `columnar "missing"`) {
+			t.Fatalf("unexpected parse errors: %v", errs)
+		}
+		// The first extractor also reads the numeric row below the second header.
+		if len(points) != 3 || points[0].Name != "first" || points[0].Value != scrape.first ||
+			points[2].Name != "second" || points[2].Value != scrape.next {
+			t.Fatalf("unexpected points: %+v", points)
+		}
+	}
+}
+
 func TestColumnarMissingColumn(t *testing.T) {
 	cfg := &config.Config{
 		Command:  "echo",
